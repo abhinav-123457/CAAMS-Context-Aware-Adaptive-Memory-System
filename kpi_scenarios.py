@@ -1158,13 +1158,13 @@ def memory_util_agent_node(state: KPIState) -> KPIState:
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 5 — TelemetryAgent (final report, always last)
 # ─────────────────────────────────────────────────────────────────────────────
-def telemetry_agent_node(state: KPIState) -> KPIState:
+def telemetry_agent_node(state):
     banner("TelemetryAgent — Final KPI Validation & Pass/Fail Report")
     mcp_ok = state["mcp_available"]
-
+ 
     mcp_rep    = T("get_telemetry_report", {}, mcp_ok)
     cache_snap = T("get_cache_snapshot",   {}, mcp_ok)
-
+ 
     print(f"\n[TelemetryAgent] MCP aggregate:")
     print(f"  steps={mcp_rep.get('total_steps',0)} "
           f"hit_rate={mcp_rep.get('cache_hit_rate_pct','?')}% "
@@ -1172,7 +1172,7 @@ def telemetry_agent_node(state: KPIState) -> KPIState:
           f"drift={mcp_rep.get('drift_flags',[])}")
     print(f"  LRU-F cap={cache_snap.get('capacity_mb','?')}MB "
           f"evictions={cache_snap.get('evictions','?')}")
-
+ 
     pred    = state.get("prediction_kpi",  {})
     cache   = state.get("cache_kpi",       {})
     system  = state.get("system_kpi",      {})
@@ -1181,20 +1181,20 @@ def telemetry_agent_node(state: KPIState) -> KPIState:
     cold_fb = state.get("cold_fallback_kpi", {})
     impr    = system.get("improvements",   {})
     base    = system.get("baseline",       {})
-
+ 
     banner("KPI 1 — Next Context Prediction Accuracy")
     print(f"  Top-1 Accuracy  : {pred.get('top1_pct','?')}%  (target >=75%)")
     print(f"  Top-3 Accuracy  : {pred.get('top3_pct','?')}%")
     print(f"  Random baseline : {pred.get('random_baseline','?')}%  "
           f"(vocab={pred.get('vocab_size','?')})")
     print(f"  top_k from directive: {pred.get('top_k_used','?')}")
-
+ 
     banner("KPI 2 — Caching Hit Rate")
-    print(f"  LRU-F hit rate  : {cache.get('lruf_hit_rate_pct','?')}%  (target >=85%)")
+    print(f"  LRU-F hit rate     : {cache.get('lruf_hit_rate_pct','?')}%  (target >=85%)")
     print(f"  Static LRU (8-slot): {cache.get('static_lru_hit_rate_pct','?')}%")
-    print(f"  Improvement     : +{cache.get('improvement_pp','?')}pp")
+    print(f"  Improvement        : +{cache.get('improvement_pp','?')}pp")
     print(f"  max_preloads from directive: {cache.get('max_preloads_used','?')}")
-
+ 
     banner("KPI 3 — System KPIs")
     print(f"  Hit rate        : {system.get('hit_rate_pct','?')}%  (target >=85%)")
     print(f"  Avg load CAAMS  : {system.get('avg_load_ms','?')}ms")
@@ -1209,62 +1209,90 @@ def telemetry_agent_node(state: KPIState) -> KPIState:
     print(f"  Avg memory util : {system.get('avg_util_pct','?')}%  (target <=40%)")
     print(f"  Stability issues: {len(system.get('stability_issues',[]))}")
     print(f"  Hot / Cold steps: {system.get('hot_steps','?')} / {system.get('cold_steps','?')}")
-
+ 
     banner("Cold Path Evidence")
     print(f"  Proof (qp=0.92) : hot={cold.get('hot','?')} cold={cold.get('cold','?')}")
     print(f"  Fallback (RL)   : hot={cold_fb.get('hot','?')} cold={cold_fb.get('cold','?')}")
-
+ 
     banner("KPI 4 — Memory Utilization Efficiency")
     print(f"  CAAMS eff       : {memutil.get('caams_efficiency_pct','?')}%")
     print(f"  Baseline eff    : {memutil.get('baseline_efficiency_pct','?')}%")
     print(f"  Relative impr   : {memutil.get('relative_improvement_pct','?')}%  (target >=30%)")
     print(f"  Util reduction  : {memutil.get('util_reduction_pp','?')}pp")
-
-    checks = {
-        "Prediction Top-1 >=75%":
+ 
+    # ── FIX 1: Separate checks into MEASURED and ESTIMATED ───────────────────
+    # MEASURED  = computed directly from simulation data (hit counts, thrash events,
+    #             preload efficiency). These are real outputs of the system.
+    # ESTIMATED = derived from hit_rate × 250ms AOSP published cold-start bound.
+    #             Not hardware-measured. Treated as simulation-derived bounds only.
+    #             Phase 2 replaces these with on-device Samsung Galaxy numbers.
+ 
+    measured_checks = {
+        "Prediction Top-1 >=75%                  [MEASURED]":
             pred.get("top1_pct", 0) >= 75.0,
-        "Caching hit rate >=85% (LRU-F)":
+        "Caching hit rate >=85% (LRU-F)          [MEASURED]":
             cache.get("lruf_hit_rate_pct", 0) >= 85.0,
-        "System cache hit rate >=85%":
+        "System cache hit rate >=85%             [MEASURED]":
             system.get("hit_rate_pct", 0) >= 85.0,
-        "Load time improvement >=20%":
-            impr.get("app_load_time_impr_pct", 0) >= 20.0,
-        "Launch time improvement >=10%":
-            impr.get("app_launch_time_impr_pct", 0) >= 10.0,
-        "Thrash reduction >=50%":
+        "Thrash reduction >=50%                  [MEASURED]":
             impr.get("thrash_reduction_pct", 0) >= 50.0,
-        "System stability issues == 0":
+        "System stability issues == 0            [MEASURED]":
             len(system.get("stability_issues", [])) == 0,
-        "Mem util efficiency rel impr >=30%":
+        "Mem util efficiency rel impr >=30%      [MEASURED]":
             memutil.get("relative_improvement_pct", 0) >= 30.0,
-        "Cold path exercised":
+        "Cold path exercised                     [MEASURED]":
             cold.get("cold", 0) > 0,
-        "Cold path RL fallback exercised":
+        "Cold path RL fallback exercised         [MEASURED]":
             cold_fb.get("cold", 0) > 0,
     }
-
+ 
+    # These two KPIs are derived from hit_rate × AOSP benchmark, not measured.
+    estimated_checks = {
+        "Load time improvement >=20%           [ESTIMATED]":
+            impr.get("app_load_time_impr_pct", 0) >= 20.0,
+        "Launch time improvement >=10%         [ESTIMATED]":
+            impr.get("app_launch_time_impr_pct", 0) >= 10.0,
+    }
+ 
     banner("PASS / FAIL SUMMARY")
-    for k, ok in checks.items():
+    print("\n  ── MEASURED KPIs (computed from simulation data) ──")
+    for k, ok in measured_checks.items():
         print(f"  [{'PASS' if ok else 'FAIL'}] {k}")
-
-    all_pass = all(checks.values())
-    print(f"\n  Overall  : {'ALL PASS ✓' if all_pass else 'SOME FAILURES ✗'}")
-    print(f"  MCP      : {'real SSE tool calls' if mcp_ok else 'in-process fallback'}")
+ 
+    print("\n  ── ESTIMATED KPIs (hit_rate × 250ms AOSP cold-start bound) ──")
+    print("  NOTE: These are simulation-derived bounds, not hardware measurements.")
+    print("  Phase 2 will replace with on-device Samsung Galaxy S/A profiling.")
+    for k, ok in estimated_checks.items():
+        print(f"  [{'PASS' if ok else 'FAIL'}] {k}  ← simulation bound only")
+ 
+    all_measured_pass  = all(measured_checks.values())
+    all_estimated_pass = all(estimated_checks.values())
+    all_pass = all_measured_pass and all_estimated_pass
+ 
+    print(f"\n  Measured KPIs  : {'ALL PASS ✓' if all_measured_pass else 'SOME FAILURES ✗'}")
+    print(f"  Estimated KPIs : {'ALL PASS ✓' if all_estimated_pass else 'SOME FAILURES ✗'}")
+    print(f"  Overall        : {'ALL PASS ✓' if all_pass else 'SOME FAILURES ✗'}")
+ 
     print(f"\n  What makes this multi-agent:")
     print(f"  - Supervisor calls Qwen to produce a directive (not a list index)")
     print(f"  - Each agent reads directive.top_k / directive.max_preloads")
     print(f"  - Supervisor can retry a failing agent (retry_budget)")
     print(f"  - Agents write agent_message that supervisor reads next round")
     print(f"  - Baselines use 8-slot LRU pool (honest thrash generation)")
+    print(f"  - Chronos: 4-signal decision table (intensity/confidence/peak/scale)")
+    print(f"  - RL: {state.get('rl_coverage_pct', '?')}% state coverage, "
+          f"LRU-F fallback for unseen states")
     print(f"  Models: Qwen2.5-1.5B (local), Markov (LSApp), Chronos-T5, RL Q-agent")
     print(f"  No third-party API. Apache 2.0.")
-
-    state["pass_fail"]    = checks
+ 
+    state["pass_fail"]    = {**measured_checks, **estimated_checks}
     state["report_ready"] = True
     state["agents_done"]  = state.get("agents_done", []) + ["telemetry_agent"]
     state["agent_message"] = {
-        "from": "telemetry_agent", "passed": all_pass,
-        "note": "final report complete",
+        "from":    "telemetry_agent",
+        "passed":  all_pass,
+        "note":    f"measured={'PASS' if all_measured_pass else 'FAIL'} "
+                   f"estimated={'PASS' if all_estimated_pass else 'FAIL'}",
     }
     return state
 
@@ -1346,6 +1374,18 @@ def main() -> int:
         "retry_count":       {},
         "report_ready":      False,
     }
+
+    from rl_eviction_policy import EvictionQAgent, QTABLE_PATH
+    _rl = EvictionQAgent()
+    if os.path.isfile(QTABLE_PATH):
+        try:
+            _rl.load(QTABLE_PATH)
+        except Exception:
+            pass
+    rl_cov = _rl.coverage_report()
+    initial["rl_coverage_pct"] = rl_cov.get("coverage_pct", 0.0)
+    print(f"[Init] RL state coverage: {rl_cov.get('coverage_pct', 0.0)}% "
+          f"({{'OK' if rl_cov.get('coverage_ok') else 'LOW'}})")
 
     t0 = time.perf_counter()
     graph.invoke(initial)
