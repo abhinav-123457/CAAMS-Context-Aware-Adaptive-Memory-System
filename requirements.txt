@@ -1,0 +1,21 @@
+numpy
+pandas
+torch
+scikit-learn
+requests
+datasets
+huggingface_hub
+
+# Agentic runtime
+langgraph
+langchain-core
+
+
+# MCP server
+mcp
+
+# Chronos
+chronos-forecasting
+
+# Multi-process pipeline (already in stdlib but explicit for clarity)
+# subprocess, argparse — stdlib, no install needed
