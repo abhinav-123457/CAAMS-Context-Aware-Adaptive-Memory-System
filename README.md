@@ -169,7 +169,7 @@ If something fails, setup.py tells you exactly which step and why.
 
 ### What a Fresh User Actually Does
 
-1. `git clone <repo>`
+1. `git clone https://github.com/abhinav-123457/CAAMS-Context-Aware-Adaptive-Memory-System`
 2. `pip install -r requirements.txt`
 3. `python setup.py`          ← one command, handles everything
 4. `python mcp_server.py`     ← Terminal 1, keep open
