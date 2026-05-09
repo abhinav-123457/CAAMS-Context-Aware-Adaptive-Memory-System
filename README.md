@@ -14,24 +14,35 @@ on-device deployment on Samsung Galaxy S/A series.
 ### 1. Real Process-Level Multi-Agent System
 
 Each agent runs as a **separate OS process**. Agents communicate **only via
-MCP HTTP tool calls** — no shared Python memory, no shared objects.
-[SupervisorAgent PID=XXXX]  reads MCP telemetry, calls Qwen, writes directive
-|
-| MCP set_pipeline_state("supervisor_directive", ...)
-v
-[ContextAgent PID=YYYY]     reads directive, calls predict_next_app MCP tool
-|
-| MCP set_pipeline_state("context_output", ...)
-v
-[MemoryAgent PID=ZZZZ]      reads both, evicts/preloads via MCP tools
-|
-| MCP set_pipeline_state("memory_output", ...)
-v
-[TelemetryAgent PID=WWWW]   reads output, writes to telemetry log, sends
-|                   recommendation back for next step
-| MCP set_pipeline_state("telemetry_output", ...)
-v
-[SupervisorAgent next step]
+MCP HTTP tool calls** - no shared Python memory and no shared objects.
+
+```text
+SupervisorAgent
+  reads MCP telemetry
+  calls Qwen
+  writes supervisor_directive
+        |
+        v
+ContextAgent
+  reads supervisor_directive
+  calls predict_next_app MCP tool
+  writes context_output
+        |
+        v
+MemoryAgent
+  reads supervisor_directive + context_output
+  evicts/preloads via MCP tools
+  writes memory_output
+        |
+        v
+TelemetryAgent
+  reads memory_output
+  writes telemetry log
+  sends recommendation back to SupervisorAgent
+        |
+        v
+SupervisorAgent next step
+```
 
 **Run this with**: `python pipeline_runner.py`
 
