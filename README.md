@@ -144,7 +144,6 @@ caams/
 
 | Dataset | License | Use |
 |---------|---------|-----|
-| LSApp (3.6M Android app events) | Apache 2.0 | Markov training + session replay |
 | LSApp (1.67M Android app events) | Apache 2.0 | Markov training + session replay |
 | Melbourne Parking Sensors | CC BY 4.0 | Query pressure signal |
 | ShareGPT 52K conversations | Apache 2.0 | KV cache workload sizing |
