@@ -15,32 +15,34 @@ Agents communicate **exclusively via MCP HTTP tool calls** — no shared Python
 objects, no shared memory, no direct function calls between agents.
 
 The MCP server is the **sole state store and message bus**.
-[SupervisorAgent process]
-|
-| writes supervisor_directive → MCP set_pipeline_state
-v
-[ContextAgent process]
-|
-| reads supervisor_directive ← MCP get_pipeline_state
-| calls predict_next_app    ← MCP tool
-| writes context_output     → MCP set_pipeline_state
-v
-[MemoryAgent process]
-|
-| reads supervisor_directive ← MCP get_pipeline_state
-| reads context_output       ← MCP get_pipeline_state
-| calls evict_app, preload_app, allocate_app ← MCP tools
-| writes memory_output       → MCP set_pipeline_state
-v
-[TelemetryAgent process]
-|
-| reads memory_output        ← MCP get_pipeline_state
-| calls record_telemetry     ← MCP tool
-| reads get_telemetry_report ← MCP tool
-| writes telemetry_output    → MCP set_pipeline_state
-|
-v
-[SupervisorAgent next step reads telemetry_output]
+
+```text
+SupervisorAgent process
+  writes supervisor_directive → MCP set_pipeline_state
+        |
+        v
+ContextAgent process
+  reads supervisor_directive ← MCP get_pipeline_state
+  calls predict_next_app    ← MCP tool
+  writes context_output     → MCP set_pipeline_state
+        |
+        v
+MemoryAgent process
+  reads supervisor_directive ← MCP get_pipeline_state
+  reads context_output       ← MCP get_pipeline_state
+  calls evict_app, preload_app, allocate_app ← MCP tools
+  writes memory_output       → MCP set_pipeline_state
+        |
+        v
+TelemetryAgent process
+  reads memory_output        ← MCP get_pipeline_state
+  calls record_telemetry     ← MCP tool
+  reads get_telemetry_report ← MCP tool
+  writes telemetry_output    → MCP set_pipeline_state
+        |
+        v
+SupervisorAgent next step reads telemetry_output
+```
 
 **Pipeline coordinator**: `pipeline_runner.py` spawns each agent as a
 subprocess using Python `subprocess.Popen`. It does not share state with agents.
