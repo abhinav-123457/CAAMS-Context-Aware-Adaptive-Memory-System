@@ -61,7 +61,6 @@ causes OOM, thrashing, or latency spikes that defeat the purpose of the memory m
 
 The EvictionQAgent unconditionally ranks eviction candidates on **hot and cold paths**.
 
-- **Why RL?** Sub-millisecond latency, zero additional memory, trained offline on 3.6M real Android app transitions
 - **Why RL?** Sub-millisecond latency, zero additional memory, trained offline on 1.67M real Android app transitions
 - **Why not Qwen?** Cold path triggers at free_pct < 25%. A 1.5B model call at that point would thrash memory further
 - **Skill name**: `rl_cold_eviction` in skill registry (see [skills.md](skills.md))
