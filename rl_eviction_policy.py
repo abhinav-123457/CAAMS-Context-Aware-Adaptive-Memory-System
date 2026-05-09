@@ -240,7 +240,8 @@ def train_eviction_agent(df: pd.DataFrame,
 
             if len(resident_apps) > POOL_LIMIT:
                 # Approximate free_pct from pool fullness
-                free_pct = np.random.uniform(5.0 , 80.0)  # Randomized for training diversity
+                free_pct = max(0.0, (POOL_LIMIT - len(resident_apps)) /
+                               max(POOL_LIMIT, 1) * 100 + 20)
                 candidates = [a for a in resident_apps if a != app]
                 if not candidates:
                     continue
