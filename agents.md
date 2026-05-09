@@ -124,6 +124,7 @@ degrading device performance during the management process itself.
 - `predict_next_app(prev_app, current_app, hour, top_k)`
   - Model: HourAwareMarkovPredictor (second-order, hour-conditioned)
   - Trained on: LSApp dataset (3.6M real Android app transitions)
+    - Trained on: LSApp dataset (1.67M real Android app transitions)
   - Latency: <1ms
 
 ### Memory Tools
@@ -192,6 +193,7 @@ This is not used by the production process-level agents.
 
 ## Real Datasets Used
 - **LSApp** (Apache 2.0) — 3.6M Android app transitions, 87 apps
+- **LSApp** (Apache 2.0) — 1.67M Android app transitions, 87 apps
 - **Melbourne Parking** (CC BY 4.0) — context query pressure signal
 - **ShareGPT/LMSYS** (Apache 2.0) — KV cache workload sizing
 
