@@ -23,6 +23,13 @@ In evaluation harness (single-process, LangGraph):
   invalid output all produce deterministic fallback, not crash)
 - Used by self-tests to prove resilience
 
+## LLM Safety Constraint (applies to all skills)
+
+No skill invokes Qwen2.5-1.5B when `free_pct < 25%` or
+`query_pressure > 0.85`. Below these thresholds every skill falls through
+to its deterministic path unconditionally. This is enforced in code,
+not by convention.
+
 ## Production Agent Skills
 
 ### skill: memory_pressure_triage
@@ -38,7 +45,10 @@ In evaluation harness (single-process, LangGraph):
   - `path` in `{hot, cold}`
   - `directive` JSON written to MCP pipeline state
 - **trigger rule**: cold when `free_pct < 25` OR `query_pressure > 0.85`
-- **latency target**: <1ms (deterministic fallback path)
+- **LLM use**: Qwen called only on hot path (`free_pct >= 25` AND
+  `pressure <= 0.85`). Deterministic rule is the fallback and the
+  unconditional cold-path mechanism.
+- **latency target**: <1ms on deterministic path
 
 ### skill: preload_candidate_ranking
 - **purpose**: rank predicted apps for preloading within memory budget
@@ -53,10 +63,12 @@ In evaluation harness (single-process, LangGraph):
   - `predictions` list with app names and probabilities
   - written to MCP `context_output` pipeline state
 - **model**: HourAwareMarkovPredictor (second-order, Apache 2.0)
-- **latency target**: <1ms on hot path
+- **LLM use**: None. Prediction filtering on aggressive task uses
+  probability threshold only (>= 0.05), no Qwen call.
+- **latency target**: <1ms
 
-### skill: adaptive_eviction_policy
-- **purpose**: evict lowest-value residents, prevent thrashing
+### skill: rl_cold_eviction
+- **purpose**: rank and execute evictions to free memory, prevent thrashing
 - **owner**: MemoryAgent
 - **callable by**: all agents
 - **MCP tools used**: `rank_eviction`, `evict_app`, `allocate_app`,
@@ -69,9 +81,14 @@ In evaluation harness (single-process, LangGraph):
   - evictions executed via MCP `evict_app`
   - preloads executed via MCP `preload_app`
   - `memory_output` written to MCP pipeline state
-- **hot path**: RL Q-agent via MCP `rank_eviction`
-- **cold path**: Qwen2.5-1.5B reasoning + RL fallback
+- **eviction mechanism**: RL Q-agent via MCP `rank_eviction` — unconditional
+  on both hot and cold paths. Sub-millisecond, zero additional RAM.
+- **LLM use**: None. Qwen is never called in this skill or the agent that
+  owns it. The previous design calling Qwen on cold path was a system design
+  error: running a 1.5B model when free_pct < 25% risks OOM on edge devices.
 - **safety rule**: never evict `protect_apps` from supervisor directive
+- **previously named**: `adaptive_eviction_policy` (renamed to reflect
+  actual mechanism — RL Q-table, not LLM)
 
 ### skill: context_window_maintenance
 - **purpose**: keep Markov transition context fresh per app switch
@@ -82,6 +99,7 @@ In evaluation harness (single-process, LangGraph):
 - **outputs**:
   - updated second-order state used by next predict call
   - stateful within MCP server (Markov model lives in server process)
+- **LLM use**: None.
 - **persistence**: Markov model state is maintained in MCP server process
   across all app switch events
 
@@ -98,11 +116,12 @@ In evaluation harness (single-process, LangGraph):
   - step written to MCP telemetry log via `record_telemetry`
   - `telemetry_output` recommendation written to MCP pipeline state
   - Supervisor reads this at start of next step
+- **LLM use**: None.
 - **thresholds**:
   - hit rate `>= 85%` → maintain policy
   - hit rate `< 85%` → increase preloads
   - hit rate `< 75%` → increase top_k and preloads
-  - free_pct `< 20%` → trigger eviction
+  - free_pct `< 20%` → trigger RL eviction
 
 ## Fail-Safe Behavior
 
@@ -113,19 +132,46 @@ All production agents implement this fallback chain:
 4. Continue pipeline — never abort on single skill failure
 
 Deterministic fallbacks:
-- Supervisor: rule-based directive from free_pct + hit_rate thresholds
+- Supervisor: rule-based directive from `free_pct` + `hit_rate` thresholds
 - ContextAgent: top-3 predictions from first-order Markov fallback
-- MemoryAgent: LRU-based eviction without Qwen
+- MemoryAgent: LRU candidate list from `pool.lru_candidates()`, no Qwen
 - TelemetryAgent: local hit/miss check from MCP snapshot
+
+## Skill Registry (multi_agent_orchestrator.py)
+
+```python
+SkillRegistry(
+    skills={
+        "memory_pressure_triage":    skill_memory_pressure_triage,
+        "preload_candidate_ranking":  cp_assess_context,
+        "rl_cold_eviction":          ma_rl_eviction,     # was: ma_qwen_eviction
+        "context_window_maintenance": cp_assess_context,
+        "telemetry_validation":       ma_validate,
+    },
+    primary_owner={
+        "memory_pressure_triage":    "supervisor",
+        "preload_candidate_ranking":  "context_predictor",
+        "rl_cold_eviction":          "memory_allocator",
+        "context_window_maintenance": "context_predictor",
+        "telemetry_validation":       "supervisor",
+    },
+    cross_agent_allowed=True,
+)
+```
 
 ## KPI Targets
 
-| KPI | Target | Benchmark |
-|-----|--------|-----------|
-| Application Load Time Improvement | 20% | No optimization baseline |
-| App Launch Time Improvement | 10%+ | No optimization baseline |
-| Memory Thrashing Reduction | 50%+ | No optimization baseline |
-| System Stability | 0 issues | No optimization baseline |
-| Next Context Prediction Top-1 | >=75% | Random prediction baseline |
-| Caching Hit Rate | >=85% | Static caching baseline |
-| Memory Utilization Efficiency | 30%+ improvement | No optimization baseline |
+| KPI | Target | Measurement |
+|-----|--------|-------------|
+| Application Load Time Improvement | 20% | Simulated bound — see latency_probe.py |
+| App Launch Time Improvement | 10%+ | Simulated bound — see latency_probe.py |
+| Memory Thrashing Reduction | 50%+ | Measured on real LSApp sessions |
+| System Stability | 0 issues | Measured — self-tests pass |
+| Next Context Prediction Top-1 | >=75% | Measured on held-out LSApp test set |
+| Caching Hit Rate | >=85% | Measured on real LSApp sessions |
+| Memory Utilization Efficiency | 30%+ improvement | Measured on real LSApp sessions |
+
+Load time and launch time figures are derived from measured hit rates combined
+with published Android cold-start benchmarks (AOSP/Samsung Knox, 180-280ms).
+They are labeled as simulated bounds, not hardware measurements.
+Phase 2 replaces these with on-device profiling on Samsung Galaxy hardware.

@@ -46,7 +46,26 @@ SupervisorAgent next step
 
 **Run this with**: `python pipeline_runner.py`
 
-### 2. Context-Aware Memory Allocation
+### 2. LLM Placement & Safety Gates
+
+Qwen2.5-1.5B-Instruct is **only** called by the SupervisorAgent and **only** when:
+- `free_pct >= 25%` (device has breathing room)
+- **AND** `query_pressure <= 0.85` (system not saturated)
+
+Below these thresholds, the Supervisor uses deterministic fallback rules. 
+**MemoryAgent never calls any LLM** — it uses the EvictionQAgent (tabular Q-learning,
+<1ms, zero RAM). Rationale: running a 1.5B model on a memory-constrained device
+causes OOM, thrashing, or latency spikes that defeat the purpose of the memory manager.
+
+### 3. Eviction Strategy: RL Q-Agent on All Paths
+
+The EvictionQAgent unconditionally ranks eviction candidates on **hot and cold paths**.
+
+- **Why RL?** Sub-millisecond latency, zero additional memory, trained offline on 3.6M real Android app transitions
+- **Why not Qwen?** Cold path triggers at free_pct < 25%. A 1.5B model call at that point would thrash memory further
+- **Skill name**: `rl_cold_eviction` in skill registry (see [skills.md](skills.md))
+
+### 4. Context-Aware Memory Allocation
 
 Memory manager dynamically allocates based on:
 - Current and predicted app context
@@ -54,18 +73,20 @@ Memory manager dynamically allocates based on:
 - Real query pressure from Melbourne parking dataset
 - KV cache pressure from ShareGPT workloads
 
-### 3. Predictive Pre-Loading
+### 5. Predictive Pre-Loading
 
 - HourAwareMarkovPredictor (second-order) trained on 3.6M real Android
   app transitions from LSApp dataset
 - Predicts top-k next apps before user switches
 - Chronos-T5-Small forecasts usage intensity per hour bucket
 
-### 4. Adaptive Caching
+### 6. Adaptive Caching & Eviction
 
 - LRU-F cache: recency × frequency × prediction bonus scoring
 - Adaptive capacity: shrinks under KV cache pressure, expands under query load
-- RL Q-agent (tabular Q-learning) ranks eviction candidates
+- RL Q-agent (tabular Q-learning, trained offline) ranks eviction candidates on **all paths** (hot and cold)
+  - Hot path: deterministic RL ranking, <1ms latency
+  - Cold path: same RL ranking, no LLM involvement in eviction decisions
 
 ---
 
@@ -87,7 +108,7 @@ caams/
 ├── rl_eviction_policy.py            # Q-learning eviction agent
 ├── local_llm.py                     # Qwen2.5-1.5B local inference
 ├── kpi_scenarios.py                 # All 7 KPIs measured vs baseline
-├── orchestrator.py                  # Agent flow showcase (LangGraph)
+├── LangGraph flow showcase.py       # Agent flow showcase (LangGraph)
 ├── memory_manager.py                # Core simulation engine
 ├── selftest_skill_failsafe.py       # Proves skill failure handling
 ├── selftest_graph_failsafe.py       # Proves LangGraph continuity under failure
@@ -109,12 +130,12 @@ caams/
 
 ## Open Weight Models (All Apache 2.0)
 
-| Model | Use | Where |
-|-------|-----|-------|
-| Qwen2.5-1.5B-Instruct (Alibaba) | Supervisor directive + cold path eviction | All agent processes |
-| Chronos-T5-Small (Amazon) | Usage intensity forecasting | `context_predictor.py` |
-| HourAwareMarkovPredictor (custom) | Next app prediction | `context_predictor.py` + MCP |
-| EvictionQAgent (custom Q-table) | Eviction candidate ranking | `rl_eviction_policy.py` + MCP |
+| Model | Use | Constraint |
+|-------|-----|------------|
+| Qwen2.5-1.5B-Instruct (Alibaba) | Supervisor directive generation only | Only when free_pct ≥ 25% AND query_pressure ≤ 0.85 |
+| Chronos-T5-Small (Amazon) | Usage intensity forecasting | Always safe (<100ms) |
+| HourAwareMarkovPredictor (custom) | Next app prediction | Always safe (<1ms) |
+| EvictionQAgent (custom Q-table) | Eviction ranking, all paths | Always safe (<1ms, zero RAM) |
 
 ---
 
@@ -195,7 +216,7 @@ for timing accuracy.
 ### Option 3: Agent Flow Trace (LangGraph Showcase)
 
 ```bash
-python orchestrator.py
+python "LangGraph flow showcase.py"
 ```
 
 Traces agent communication step by step. Single process. Useful for

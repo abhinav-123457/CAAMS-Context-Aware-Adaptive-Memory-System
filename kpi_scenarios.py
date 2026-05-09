@@ -784,20 +784,25 @@ def system_agent_node(state: KPIState) -> KPIState:
         free_pct = float(snap_pre.get("free_pct", 100.0))
         kpi_rep  = T("get_telemetry_report", {}, mcp_ok)
 
-        qwen_res = qwen_json(
-            "Samsung memory manager supervisor. Reply ONLY with JSON.",
-            f"free_pct={free_pct:.1f}, pressure={pressure:.2f}, "
-            f"hit_rate={kpi_rep.get('cache_hit_rate_pct', 100)}%, "
-            f"macro_path={macro_path}, step={step+1}, app={app!r}. "
-            'Return: {"route": "hot|cold", "reason": "one sentence"}'
-        )
+        _llm_routing_safe = free_pct >= 25.0 and pressure <= 0.85
+        qwen_res={}
 
+        if _llm_routing_safe:
+            qwen_res = qwen_json( "Samsung memory manager supervisor. Reply ONLY with JSON.",
+                                f"free_pct={free_pct:.1f}, pressure={pressure:.2f}, "
+                                f"hit_rate={kpi_rep.get('cache_hit_rate_pct', 100)}%, "
+                                f"macro_path={macro_path}, step={step+1}, app={app!r}. "
+                                'Return: {"route": "hot|cold", "reason": "one sentence"}'
+            )
+        
         if qwen_res and not qwen_res.get("_error") and "route" in qwen_res:
-            path   = "cold" if qwen_res["route"] == "cold" else "hot"
+            path = "cold" if qwen_res["route"] == "cold" else "hot"
             reason = qwen_res.get("reason", "")
-        else:
-            path   = "cold" if (free_pct < 25 or pressure > 0.85) else "hot"
-            reason = f"[fallback] free={free_pct:.1f}%"
+        else:   
+            path = "cold" if (free_pct < 25.0 or pressure > 0.85) else "hot"
+            reason = f"[deterministic] free={free_pct:.1f}% llm_safe={_llm_routing_safe}"
+
+
 
         if step % 5 == 0:
             print(f"  [{step+1:2d}] Qwen route={path.upper()} | {app} | {reason[:55]}")
@@ -842,22 +847,12 @@ def system_agent_node(state: KPIState) -> KPIState:
                          list(snap_pre.get("preloaded_apps", {}).keys()))
             evictable = [a for a in all_apps if a != app]
 
-            ev_res = qwen_json(
-                "Samsung memory manager under pressure. Reply ONLY with JSON.",
-                f"free_mb={snap_pre.get('free_mb')}, protect={app!r}, "
-                f"evictable={evictable}, predicted={[p['app'] for p in preds]}. "
-                'Return: {"evict": ["app1"], "reasoning": "one sentence"}'
-            )
+            ranked = T("rank_eviction", {
+                "candidates": evictable[:4], "memory_free_pct": free_pct}, mcp_ok)
+            to_evict = ranked.get("ranked", evictable)[:2]
 
-            if ev_res and not ev_res.get("_error") and "evict" in ev_res:
-                to_evict = [a for a in ev_res["evict"] if a != app]
-                if step % 5 == 0:
-                    print(f"    [Qwen cold] evict={to_evict} | "
-                          f"{ev_res.get('reasoning','')[:55]}")
-            else:
-                ranked   = T("rank_eviction", {
-                    "candidates": evictable[:4], "memory_free_pct": free_pct}, mcp_ok)
-                to_evict = ranked.get("ranked", evictable)[:2]
+            if step % 5 == 0:
+                print(f"    [RL cold eviction] evict={to_evict} free={free_pct:.1f}%")
 
             evicted_this_step = []
             for ev_app in to_evict:
@@ -935,19 +930,10 @@ def system_agent_node(state: KPIState) -> KPIState:
             all_apps  = (list(snap_cp.get("allocated_apps", {}).keys()) +
                          list(snap_cp.get("preloaded_apps", {}).keys()))
             evictable = [x for x in all_apps if x != a]
-            ev_j = qwen_json(
-                "Samsung supervisor. Reply ONLY with JSON.",
-                f"free_pct={fp:.1f}, qp=0.92, evictable={evictable}. "
-                'Return: {"evict": ["app1"], "reasoning": "one sentence"}'
-            )
-            if ev_j and "evict" in ev_j:
-                for ev_app in ev_j.get("evict", [])[:2]:
-                    T("evict_app", {"app_name": ev_app}, mcp_ok)
-            else:
-                ranked = T("rank_eviction", {
-                    "candidates": evictable[:4], "memory_free_pct": fp}, mcp_ok)
-                for ev_app in ranked.get("ranked", evictable)[:2]:
-                    T("evict_app", {"app_name": ev_app}, mcp_ok)
+            ranked   = T("rank_eviction", {
+                "candidates": evictable[:4], "memory_free_pct": fp}, mcp_ok)
+            for ev_app in ranked.get("ranked", evictable)[:2]:
+                T("evict_app", {"app_name": ev_app}, mcp_ok)
         else:
             c_hot += 1
 

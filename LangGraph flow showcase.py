@@ -179,39 +179,42 @@ def supervisor_node(state: AgentState) -> AgentState:
 
     print(f"  MCP telemetry → hit_rate={hit_rate}% free={free_pct}% drift={drift}")
     print(f"  TelemetryAgent recommendation (last round) → {prev_rec}")
+    _llm_safe = free_pct >= 25.0 and state["query_pressure"] <= 0.85
+    result = {}
 
-    result = qwen(
+    if _llm_safe:
+
+        result = qwen(
         "You are the Supervisor of a Samsung on-device memory manager. "
         "Reply ONLY with valid JSON.",
         f"""
-free_pct={free_pct:.1f}, query_pressure={state['query_pressure']:.3f},
-chronos_intensity={state['chronos_intensity']:.3f},
-hit_rate={hit_rate}, drift={drift},
-prev_recommendation="{prev_rec}",
-loop_count={loop_count}, current_app="{state['current_app']}"
+        free_pct={free_pct:.1f}, query_pressure={state['query_pressure']:.3f},
+        chronos_intensity={state['chronos_intensity']:.3f},
+        hit_rate={hit_rate}, drift={drift},
+        prev_recommendation="{prev_rec}",
+        loop_count={loop_count}, current_app="{state['current_app']}"
 
-Rules:
-- path="cold" if free_pct<25 or query_pressure>0.85
-- top_k=5 and max_preloads=3 if hit_rate<75
-- eviction_urgency="critical" if free_pct<15
-- route_after_memory="supervisor" if hit_rate<85 and loop_count<2
-- route_after_memory="telemetry" otherwise
+        Rules:
+            - path="cold" if free_pct<25 or query_pressure>0.85
+            - top_k=5 and max_preloads=3 if hit_rate<75
+            - eviction_urgency="critical" if free_pct<15
+            - route_after_memory="supervisor" if hit_rate<85 and loop_count<2
+            - route_after_memory="telemetry" otherwise
 
-Return JSON:
-{{
-  "context_task": "predict_standard|predict_aggressive|predict_conservative",
-  "top_k": <1-5>,
-  "memory_task": "preload_predicted|evict_and_preload|evict_only|hold",
-  "max_preloads": <0-3>,
-  "eviction_urgency": "none|low|high|critical",
-  "protect_apps": ["{state['current_app']}"],
-  "route_after_memory": "telemetry|supervisor",
-  "reason": "<one sentence>",
-  "detected_drift": {drift},
-  "path": "hot|cold"
-}}
-"""
-    )
+        Return JSON:
+        {{
+            "context_task": "predict_standard|predict_aggressive|predict_conservative",
+            "top_k": <1-5>,
+            "memory_task": "preload_predicted|evict_and_preload|evict_only|hold",
+            "max_preloads": <0-3>,
+            "eviction_urgency": "none|low|high|critical",
+            "protect_apps": ["{state['current_app']}"],
+            "route_after_memory": "telemetry|supervisor",
+            "reason": "<one sentence>",
+            "detected_drift": {drift},
+            "path": "hot|cold"
+            }}
+        """)
 
     required = {"context_task","top_k","memory_task","max_preloads",
                  "eviction_urgency","protect_apps","route_after_memory",
@@ -332,29 +335,13 @@ def memory_agent_node(state: AgentState) -> AgentState:
         evictable = [a for a in all_apps if a not in protect]
 
         if evictable:
-            if directive["path"] == "cold" and directive["eviction_urgency"] in ("high","critical"):
-                # Cold path: Qwen decides which apps to evict
-                ev = qwen(
-                    "Samsung memory manager under pressure. Reply ONLY JSON.",
-                    f"free_pct={free_pct:.1f}, urgency={directive['eviction_urgency']}, "
-                    f"protect={list(protect)}, evictable={evictable}, "
-                    f"predicted={[p['app'] for p in preds[:3]]}. "
-                    'Return: {"evict": ["app1"], "reasoning": "one sentence"}'
-                )
-                if ev and "evict" in ev:
-                    to_evict = [a for a in ev["evict"] if a not in protect and a in evictable]
-                    print(f"  Qwen cold eviction → {to_evict} | {ev.get('reasoning','')}")
-                else:
-                    ranked   = mcp("rank_eviction", {"candidates": evictable[:4],
-                                                      "memory_free_pct": free_pct})
-                    to_evict = ranked.get("ranked", evictable)[:2]
-                    print(f"  RL fallback eviction → {to_evict}")
-            else:
-                # Hot path: RL agent via MCP
-                ranked   = mcp("rank_eviction", {"candidates": evictable[:4],
-                                                   "memory_free_pct": free_pct})
-                to_evict = ranked.get("ranked", evictable)[:2]
-                print(f"  RL hot eviction → {to_evict}")
+            ranked = mcp("rank_eviction", {
+                "candidates":      evictable[:4],
+                "memory_free_pct": free_pct,
+            })
+            to_evict = ranked.get("ranked", evictable)[:2]
+            path_label = directive.get("path", "hot")
+            print(f" RL eviction [{path_label} path] --> {to_evict} | free={free_pct:.1f}%")
 
             for app in to_evict:
                 res = mcp("evict_app", {"app_name": app})

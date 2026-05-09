@@ -378,68 +378,36 @@ def ma_rule_engine(state: MemoryState) -> MemoryState:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Node 2b — ma_qwen_eviction  (COLD PATH only — after rule engine)
+# Node 2b — ma_rl_eviction  (COLD PATH only — after rule engine)
 # FIX: allocation_plan now always has preload list from rule engine
 # FIX: Qwen only overrides eviction list, never touches preload
 # ─────────────────────────────────────────────────────────────────────────────
-def ma_qwen_eviction(state: MemoryState) -> MemoryState:
+def ma_rl_eviction(state: MemoryState) -> MemoryState:
     t0   = time.perf_counter()
     snap = state["memory_snapshot"]
-    plan = state["allocation_plan"]   # FIX: always populated by rule engine before reaching here
-    _llm = get_llm()
+    plan = state["allocation_plan"]
 
     all_resident = list(snap["allocated_apps"].keys()) + list(snap["preloaded_apps"].keys())
-    evictable    = [a for a in all_resident if a != state["current_app"]]
+    evictable = [a for a in all_resident if a != state["current_app"]]
 
-    if not evictable:
-        state["step_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-        return state
-
-    system_prompt = (
-        "You are a memory manager for a Samsung Galaxy phone. "
-        "Respond ONLY with a JSON object, no markdown, no extra text."
-    )
-
-    user_prompt = (
-        f"Memory is tight: {snap['free_mb']} MB free ({snap['free_pct']}% of {snap['total_mb']} MB).\n"
-        f"Active app (DO NOT evict): {state['current_app']}\n"
-        f"Apps that can be evicted: {evictable}\n"
-        f"Predicted next apps (protect these): {[p['app'] for p in state['predicted_apps']]}\n\n"
-        f'Return JSON:\n{{"evict": ["app_to_evict_first", "app_to_evict_second"], "reasoning": "one sentence"}}'
-    )
-
-    # If Qwen is unavailable, fall back deterministically.
-    if _llm is None:
-        lru = pool.lru_candidates(exclude=[state["current_app"]], top_n=2)
-        plan["evict"] = lru
-        plan["reasoning"] = "[Qwen unavailable -> LRU fallback]"
-        state["allocation_plan"] = plan
-        state["reasoning"] = plan["reasoning"]
-        state["step_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-        return state
-
-    try:
-        response = _llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
-        ])
-        parsed     = parse_json_response(response)
-        evict_list = [a for a in parsed.get("evict", []) if a != state["current_app"]]
-        plan["evict"]     = evict_list
-        plan["reasoning"] = f"[Qwen2.5-1.5B cold path] {parsed.get('reasoning', '')}"
-
-    except Exception as e:
-        lru = pool.lru_candidates(exclude=[state["current_app"]], top_n=2)
-        plan["evict"]     = lru
-        plan["reasoning"] = f"[Qwen2.5:1.5b fallback->LRU] parse error: {e}"
-
+    if evictable:
+        rl_ranked = rank_eviction_candidates.invoke({
+            "candidates":      evictable[:5],
+            "memory_free_pct": snap["free_pct"],
+        })
+        to_evict = rl_ranked[:2]
+        plan["evict"] = to_evict
+        plan["reasoning"] = ( f"[RL Q-Agent cold path] free={snap['free_pct']}% "
+                             f"evicting={to_evict}")
+    else :
+        plan["reasoning"] = ( f"[RL Q-Agent cold path] nothing evictable, free={snap['free_pct']}%")
+    
     state["allocation_plan"] = plan
     state["reasoning"]       = plan["reasoning"]
     state["step_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-
-    print(f"\n[Node 2b: ma_qwen_eviction (Qwen2.5:1.5b)]  ({state['step_latency_ms']} ms)")
-    print(f"  Evict   : {plan['evict']}")
-    print(f"  Reason  : {plan['reasoning']}")
+    print(f"\n[Node 2b: ma_rl_eviction (cold path)]  ({state['step_latency_ms']} ms)")
+    print(f" Evicting :{plan.get('evict', [])}")
+    print(f" Reason :{plan['reasoning']}")
     return state
 
 
@@ -584,14 +552,14 @@ def build_memory_agent():
         skills={
             "memory_pressure_triage": skill_memory_pressure_triage,
             "preload_candidate_ranking": ma_rule_engine,
-            "adaptive_eviction_policy": ma_qwen_eviction,
+            "rl_cold_eviction": ma_rl_eviction,
             "context_window_maintenance": cp_assess_context,
             "telemetry_validation": ma_validate,
         },
         primary_owner={
             "memory_pressure_triage": "supervisor",
             "preload_candidate_ranking": "context_predictor",
-            "adaptive_eviction_policy": "memory_allocator",
+            "rl_cold_eviction": "memory_allocator",
             "context_window_maintenance": "context_predictor",
             "telemetry_validation": "supervisor",
         },
@@ -606,7 +574,7 @@ def build_memory_agent():
     )
     ma_agent = MemoryAllocationAgent(
         rule_engine_fn=ma_rule_engine,
-        qwen_eviction_fn=ma_qwen_eviction,
+        qwen_eviction_fn=ma_rl_eviction,
         execute_fn=ma_execute,
         validate_fn=ma_validate,
         skill_executor=skill_executor,
@@ -629,12 +597,14 @@ def build_memory_agent():
         pressure  = state.get("query_pressure", 0.0)
         _llm      = get_llm()
 
-        if _llm is not None:
+        llm_safe = float(free_pct) >= 25.0 and float(pressure) <= 0.85
+
+        if _llm is not None and llm_safe:
             try:
                 from langchain_core.messages import HumanMessage, SystemMessage
                 sys_p  = (
                     "You are the Supervisor of a Samsung on-device memory manager. "
-                    "Reply ONLY with a JSON object — no markdown, no extra text."
+                    "Respond ONLY with a JSON object, no markdown, no extra text."
                 )
                 user_p = (
                     f"free_pct={free_pct:.1f}, chronos_intensity={intensity:.3f}, "
@@ -682,7 +652,7 @@ def build_memory_agent():
     graph.add_node("supervisor",         _supervisor_node)
     graph.add_node("cp_assess_context",  cp_agent.step)
     graph.add_node("ma_rule_engine",     ma_agent.rule_engine)
-    graph.add_node("ma_qwen_eviction",   ma_agent.qwen_eviction)
+    graph.add_node("ma_rl_eviction",   ma_agent.rl_eviction)
     graph.add_node("ma_execute",         ma_agent.execute)
     graph.add_node("ma_validate",        ma_agent.validate)
 
@@ -700,10 +670,10 @@ def build_memory_agent():
     # cold → Qwen eviction reasoning first, then execute
     graph.add_conditional_edges(
         "ma_rule_engine",
-        lambda s: "ma_qwen_eviction" if s["path"] == "cold" else "ma_execute",
+        lambda s: "ma_rl_eviction" if s["path"] == "cold" else "ma_execute",
     )
 
-    graph.add_edge("ma_qwen_eviction", "ma_execute")
+    graph.add_edge("ma_rl_eviction", "ma_execute")
     graph.add_edge("ma_execute",       "ma_validate")
 
     # FIX: retry capped at 3 to prevent infinite loop

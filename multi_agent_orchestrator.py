@@ -159,10 +159,10 @@ class MemoryAllocationAgent:
             )
         return self.rule_engine_fn(state)
 
-    def qwen_eviction(self, state: dict) -> dict:
+    def rl_eviction(self, state: dict) -> dict:
         if self.skill_executor is not None:
             return self.skill_executor.execute(
-                skill_name="adaptive_eviction_policy",
+                skill_name="rl_cold_eviction",
                 caller_agent=self.name,
                 input_state=state,
             )
