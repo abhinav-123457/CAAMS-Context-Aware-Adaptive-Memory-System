@@ -5,7 +5,6 @@
 #   - Chronos-T5-Small (Amazon, Apache 2.0) → usage intensity forecasting
 #   - Markov Chain (hour-aware) → next app prediction on LSApp real data
 #
-# Real data: LSApp (3.6M events, 87 apps, Sep 2017 - May 2018)
 # Real data: LSApp (1.67M events, 87 apps, Sep 2017 - May 2018)
 # License: Apache 2.0
 
