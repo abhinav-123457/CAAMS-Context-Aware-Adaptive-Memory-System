@@ -76,8 +76,6 @@ Memory manager dynamically allocates based on:
 
 ### 5. Predictive Pre-Loading
 
-- HourAwareMarkovPredictor (second-order) trained on 3.6M real Android
-  app transitions from LSApp dataset
 - HourAwareMarkovPredictor (second-order) trained on 1.67M real Android
   app transitions from LSApp dataset
 - Predicts top-k next apps before user switches
