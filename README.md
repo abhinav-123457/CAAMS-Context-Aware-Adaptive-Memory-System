@@ -1,11 +1,9 @@
 # CAAMS — Context-Aware Adaptive Memory System
 
-**Phase 1 Prototype** for: *Context-Aware, Adaptive Memory Solution for
-Mobile Agentic Systems* (Samsung ennovateX AX Hackathon)
-
+**Prototype** for: *Context-Aware, Adaptive Memory Solution for
+Mobile Agentic Systems* 
 **Important**: This is a PC simulation prototype. KPI numbers are simulation
-harness results, not Android/Samsung smartphone measurements. Phase 2 targets
-on-device deployment on Samsung Galaxy S/A series.
+harness results, not Android smartphone measurements.
 
 ---
 
@@ -102,7 +100,7 @@ caams/
 ├── pipeline_runner.py               # Spawns agents as subprocesses
 ├── mcp_server.py                    # MCP tool server (SSE transport)
 │                                    # All agent tools + pipeline state bus
-├── device_pool.py                   # Samsung device memory pool simulation
+├── device_pool.py                   # device memory pool simulation
 ├── cache_manager.py                 # Adaptive LRU-F cache
 ├── context_predictor.py             # Markov predictor + Chronos forecaster
 ├── rl_eviction_policy.py            # Q-learning eviction agent
@@ -261,12 +259,12 @@ python selftest_graph_failsafe.py
 
 ---
 
-## Phase 2 Migration Path (Samsung Edge Devices)
+## Phase 2 Migration Path (Edge Devices)
 
 - Replace simulation memory pool with Android memory APIs
 - Move Qwen cold path to on-device runtime (llama.cpp on Exynos/Snapdragon NPU)
 - Replace Melbourne proxy signal with on-device context sensors
-- Measure KPIs directly on Samsung Galaxy S/A series hardware
+- Measure KPIs directly on edge hardware
 
 ---
 
